@@ -1182,11 +1182,7 @@ algorithm_name(start_iterator, end_iterator, other_arguments);
 
 1.  `std::sort()`：对指定范围内的元素进行排序。
 
-cpp
-
-复制
-
-```
+```cpp
 #include <iostream>
 #include <vector>
 #include <algorithm>
