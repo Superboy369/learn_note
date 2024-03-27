@@ -899,57 +899,53 @@ Implementation of myFunction in ConcreteClass.
 
 函数模板可以用于定义通用的函数算法，例如排序、搜索等，以及对不同类型的数据进行通用的操作。通过使用函数模板，可以在不同的数据类型上实现代码的重用，并提高代码的灵活性和可扩展性。
 ## 2.类模板的定义与使用
-函数模板是C++中一种通用的编程工具，用于定义可以适用于多种数据类型的函数。函数模板可以根据实际使用的数据类型自动生成相应的函数代码。
+在C++中，类模板（Class Template）是一种用于创建通用类的机制。通过类模板，可以定义一个泛型类，其中的类型参数可以在实例化时进行指定，以适应不同的数据类型。
 
-以下是函数模板的定义和使用的基本步骤：
+类模板的定义使用关键字template，后跟类型参数列表和类的定义。类型参数可以是任何有效的类型，如基本类型（例如int、char）、指针、引用或自定义的类类型。
 
-1.  函数模板的定义：
+下面是一个类模板的基本定义示例：
+```cpp
+template <typename T>
+class MyClass {
+public:
+  MyClass(T value) : data(value) {}
+  void print() {
+    std::cout << "Value: " << data << std::endl;
+  }
+private:
+  T data;
+};
+```
+在上面的例子中，MyClass是一个类模板，它有一个类型参数T。类模板中定义了一个成员变量data和一个成员函数print()。构造函数接受一个参数并将其赋值给data成员。
 
-    -   使用关键字`template`开始函数模板的定义。
+要实例化一个类模板，需要在类名后面使用尖括号<>来提供实际的类型参数。例如，要创建一个MyClass的实例，其中T被指定为int类型，可以这样做：
 
-    -   在`template`后面使用`<typename T>`或`<class T>`来声明模板参数。`T`可以是任意合法的标识符，表示待定的类型。
+```cpp
+MyClass<int> myObj(10);
+myObj.print();  // 输出：Value: 10
+```
+在实例化时，编译器将使用指定的类型替换类模板中的类型参数，生成具体的类定义。
 
-    -   在函数的返回类型、参数列表或函数体中，使用模板参数`T`作为通用的类型表示。
+使用类模板时，还可以根据需要指定多个类型参数，例如：
+```cpp
+template <typename T, typename U>
+class Pair {
+public:
+  Pair(T first, U second) : firstValue(first), secondValue(second) {}
+  void print() {
+    std::cout << "First: " << firstValue << ", Second: " << secondValue << std::endl;
+  }
+private:
+  T firstValue;
+  U secondValue;
+};
 
-    -   示例代码如下：
-        ```cpp
-        template<typename T>
-        void myFunction(T param) {
-            // 函数体代码
-        }
-        ```
+Pair<int, double> myPair(10, 3.14);
+myPair.print();  // 输出：First: 10, Second: 3.14
+```
+在上面的示例中，Pair类模板有两个类型参数T和U，在实例化时，一个被指定为int，另一个被指定为double。
 
-1.  使用函数模板：
-
-    -   在调用函数时，编译器会根据实际参数的类型推断出模板参数的具体类型，并实例化相应的函数。
-
-    -   可以直接调用函数模板并传递相应的参数。
-
-    -   示例代码如下：
-        ```cpp
-        int main() {
-            myFunction(10);  // 参数为整数类型，实例化成 void myFunction<int>(int param)
-            myFunction(3.14);  // 参数为浮点数类型，实例化成 void myFunction<double>(double param)
-            return 0;
-        }
-        ```
-
-1.  显式指定模板参数：
-
-    -   在某些情况下，编译器可能无法自动推断模板参数的类型，这时可以显式指定模板参数。
-
-    -   使用`<>`语法，在函数名后面加上`<T>`，其中`T`是要指定的具体类型。
-
-    -   示例代码如下：
-        ```cpp
-        int main() {
-            myFunction<int>(10);  // 显式指定模板参数为整数类型
-            myFunction<double>(3.14);  // 显式指定模板参数为浮点数类型
-            return 0;
-        }
-        ```
-
-函数模板可以用于定义通用的函数算法，例如排序、搜索等，以及对不同类型的数据进行通用的操作。通过使用函数模板，可以在不同的数据类型上实现代码的重用，并提高代码的灵活性和可扩展性。
+类模板提供了一种灵活且通用的方式来定义可以适应不同类型的类。通过使用类模板，可以减少代码的重复，并提高代码的可重用性。
 # STL与泛型程序设计
 ## 1.泛型程序设计的概念
 泛型程序设计（Generic Programming）是一种编程范式，它的目标是编写可重用和通用的代码，以便适用于多种数据类型。泛型程序设计通过参数化类型（即模板）来实现，在编写代码时不需要指定具体的数据类型，而是将算法和数据类型解耦，使得代码可以适用于不同的数据类型，提高代码的灵活性和可重用性。
