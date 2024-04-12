@@ -1,2 +1,2 @@
 # learn_note
-My notes during the study process.(Of course, this is also my first github repository)
+这个远程仓库为本人在学习过程中的一些笔记备忘录，以备回顾。
