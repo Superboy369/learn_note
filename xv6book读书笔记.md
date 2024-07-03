@@ -99,5 +99,17 @@ xv6是*monolithic kernel*（宏内核），与之对应的是*microkernel*（微
 * mret之后，在supervisor mode下执行main()函数，main()函数中只有一个cpu会初始化一些内核服务和子系统（比如创建内核页表、设置页表基址、初始化buffer cache、inode cache、文件表等），并且调用userinit()函数初始化创建第一个用户进程。
 * userinit()执行initcode.S中的汇编指令，调用exec()函数调用。
 * exec()将第一个进程的地址空间替换为init.c对应可执行文件的。
-* init在exec()sh.c对应的可执行文件。         
+* init再在fork()之后子进程中exec()sh.c对应的可执行文件。         
 这一切搞完之后，第四步的main()函数每个cpu都会最后调用scheduler()函数运行每个cpu的调度线程进行进程的调度，第一个被调度的是刚刚被设置好的shell进程。
+## 3 Page tables
+### 3.1 Paging hardware
+
+![image.png](https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/5df0b26ed170435695cbb393702a8c58~tplv-k3u1fbpfcp-jj-mark:0:0:0:0:q75.image#?w=797&h=802&s=87587&e=png&b=fdfcfc)
+* xv6虚拟地址位数占64/39bit(VA)(39 = 9 + 9 + 9 + 12)，物理地址位数占56bit(PA)(56 = 44 + 12)，每页$2^{12} = 4094$byte，每个PTE占64/54bit(54 = 44 + 10)。            
+* 每个cpu一个satp寄存器。
+* 指令使用的都是虚拟地址，硬件负责将PA转化为VA，然后将PA传给DRAM硬件来读写内存。
+### 3.2 Kernel address space
+xv6每个进程一个自己的用户页表和一个共用的内核页表，这个共用的内核页表的映射如下：
+
+![image.png](https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3372b932b2604b7ab97e6ae945584315~tplv-k3u1fbpfcp-jj-mark:0:0:0:0:q75.image#?w=825&h=823&s=86544&e=png&b=fefefe)
+内核地址空间都是直接映射，但是除了trampoline页和每个进程对应的内核栈被映射了两次，一次直接映射，一次虚拟高地址映射。
