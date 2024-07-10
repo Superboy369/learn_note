@@ -96,7 +96,7 @@ xv6是*monolithic kernel*（宏内核），与之对应的是*microkernel*（微
 * RISC-V机器加电，初始化自己，运行存储在ROM中的boot loader，boot loader将xv6内核加载到内存，起始地址是0x80000000。
 * 开始执行xv6 kernel/entry.S中的代码_entry函数，设置内核栈以便执行内核c函数。（_entry中的代码是要设置好内核栈stack0，以便下面执行xv6的c函数，并调用start函数）
 * 执行xv6 kernel/start.c中的start()函数，在machine mode下设置mret用的一些东西。（start()函数在machine mode下设置了mstatus寄存器以备最后执行的mret返回至supervisor mode，设置了mepc寄存器以备mret返回至main()函数，设置satp寄存器为0以禁用页表，并对时钟芯片编程以产生定时器中断，最后执行内嵌汇编指令mret跳转到main()函数）
-* mret之后，在supervisor mode下执行main()函数，main()函数中只有一个cpu会初始化一些内核服务和子系统（比如创建内核页表、设置页表基址、初始化buffer cache、inode cache、文件表等），并且调用userinit()函数初始化创建第一个用户进程。
+* mret之后，在supervisor mode下执行main()函数，main()函数中只有一个cpu会初始化一些内核服务和子系统（比如编程PLIC硬件写寄存器使能产生PLIC中断、创建内核页表、设置页表基址、初始化buffer cache、inode cache、文件表等），并且调用userinit()函数初始化创建第一个用户进程，其他的cpu只需要打开页表、编程当前cpu硬件写寄存器使能接收PLIC中断。
 * userinit()执行initcode.S中的汇编指令，调用exec()函数调用。
 * exec()将第一个进程的地址空间替换为init.c对应可执行文件的。
 * init再在fork()之后子进程中exec()sh.c对应的可执行文件。         
@@ -113,3 +113,157 @@ xv6每个进程一个自己的用户页表和一个共用的内核页表，这�
 
 ![image.png](https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3372b932b2604b7ab97e6ae945584315~tplv-k3u1fbpfcp-jj-mark:0:0:0:0:q75.image#?w=825&h=823&s=86544&e=png&b=fefefe)
 内核地址空间都是直接映射，但是除了trampoline页和每个进程对应的内核栈被映射了两次，一次直接映射，一次虚拟高地址映射。
+## 4 Traps and system calls
+## 5 Interrupts and device drivers
+### 5.1 操作系统控制设备的方式
+操作系统以memory mapped的方式将设备控制寄存器mapped到物理内存，使得可以使用汇编指令来进行设备的控制。
+```c
+// the UART control registers are memory-mapped
+// at address UART0. this macro returns the
+// address of one of the registers.
+#define Reg(reg) ((volatile unsigned char *)(UART0 + reg))
+
+// the UART control registers.
+// some have different meanings for
+// read vs write.
+// see http://byterunner.com/16550.html
+#define RHR 0 // receive holding register (for input bytes)
+#define THR 0 // transmit holding register (for output bytes)
+#define IER 1 // interrupt enable register
+#define IER_RX_ENABLE (1<<0)
+#define IER_TX_ENABLE (1<<1)
+#define FCR 2 // FIFO control register
+#define FCR_FIFO_ENABLE (1<<0)
+#define FCR_FIFO_CLEAR (3<<1) // clear the content of the two FIFOs
+#define ISR 2 // interrupt status register
+#define LCR 3 // line control register
+#define LCR_EIGHT_BITS (3<<0)
+#define LCR_BAUD_LATCH (1<<7) // special mode to set baud rate
+#define LSR 5 // line status register
+#define LSR_RX_READY (1<<0) // input is waiting to be read from RHR
+#define LSR_TX_IDLE (1<<5) // THR can accept another character to send
+  
+#define ReadReg(reg) (*(Reg(reg)))
+#define WriteReg(reg, v) (*(Reg(reg)) = (v))
+```
+不仅仅是设备，cpu本身也会有控制寄存器映射到物理内存中。如PLIC和cpu中都有控制寄存器来使能PLIC中断，一个是使能产生PLIC中断，一个是使能接收PLIC中断。
+```c
+// qemu puts platform-level interrupt controller (PLIC) here.
+#define PLIC 0x0c000000L
+#define PLIC_PRIORITY (PLIC + 0x0)
+#define PLIC_PENDING (PLIC + 0x1000)
+#define PLIC_MENABLE(hart) (PLIC + 0x2000 + (hart)*0x100)
+#define PLIC_SENABLE(hart) (PLIC + 0x2080 + (hart)*0x100)
+#define PLIC_MPRIORITY(hart) (PLIC + 0x200000 + (hart)*0x2000)
+#define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart)*0x2000)
+#define PLIC_MCLAIM(hart) (PLIC + 0x200004 + (hart)*0x2000)
+#define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
+```
+### 5.2 内核main()对设备的初始化
+每个cpu都会执行`plicinithart()`来使能当前cpu接收PLIC中断。只有一个cpu会执行`consoleinit()`来通过写uart寄存器的方式设置uart设备，执行`plicinit()`来使能PLIC产生中断。
+```c
+// start() jumps here in supervisor mode on all CPUs.
+void
+main()
+{
+    if(cpuid() == 0){
+        consoleinit();
+        printfinit();
+        printf("\n");
+        printf("xv6 kernel is booting\n");
+        printf("\n");
+        kinit(); // physical page allocator
+        kvminit(); // create kernel page table
+        kvminithart(); // turn on paging
+        procinit(); // process table
+        trapinit(); // trap vectors
+        trapinithart(); // install kernel trap vector
+        plicinit(); // set up interrupt controller
+        plicinithart(); // ask PLIC for device interrupts
+        binit(); // buffer cache
+        iinit(); // inode cache
+        fileinit(); // file table
+        virtio_disk_init(); // emulated hard disk
+        userinit(); // first user process
+        __sync_synchronize();
+        started = 1;
+    } else {
+        while(started == 0)
+            ;
+        __sync_synchronize();
+        printf("hart %d starting\n", cpuid());
+        kvminithart(); // turn on paging
+        trapinithart(); // install kernel trap vector
+        plicinithart(); // ask PLIC for device interrupts
+    }
+    scheduler();
+}
+```
+### 5.3 device driver
+设备驱动程序分为两部分：
+* top：负责系统调用接口，如read()、write()，数据从用户区->设备
+* bottom：负责设备对应的中断处理程序，数据从设备->用户区
+
+以uart.c驱动程序为例，top部分有函数`uartputc()`向uart_tx_buffer中添加字符，`uartgetc()`从uart_tx_buffer中获取字符。
+```c
+// add a character to the output bufyoufer and tell the
+// UART to start sending if it isn't already.
+// blocks if the output buffer is full.
+// because it may block, it can't be called
+// from interrupts; it's only suitable for use
+// by write().
+void
+uartputc(int c)
+{
+    acquire(&uart_tx_lock);
+    if(panicked){
+        for(;;)
+            ;
+    }
+    while(1){
+        if(((uart_tx_w + 1) % UART_TX_BUF_SIZE) == uart_tx_r){
+            // buffer is full.
+            // wait for uartstart() to open up space in the buffer.
+            sleep(&uart_tx_r, &uart_tx_lock);
+        } else {
+            uart_tx_buf[uart_tx_w] = c;
+            uart_tx_w = (uart_tx_w + 1) % UART_TX_BUF_SIZE;
+            uartstart();
+            release(&uart_tx_lock);
+            return;
+        }
+    }
+}
+
+// read one input character from the UART.
+// return -1 if none is waiting.
+int
+uartgetc(void)
+{
+    if(ReadReg(LSR) & 0x01){
+        // input data is ready.
+        return ReadReg(RHR);
+    } else {
+        return -1;
+    }
+}
+```
+uart.c驱动程序bottom部分有函数`uartintr()`uart设备的中断处理函数。
+
+而console.c驱动程序top部分有函数`consputc()`被`printf()`所调用且调用`uartputc()`向uart的传输寄存器写字符，函数`consolewrite()`被`write(console)`所调用且调用`uartputc()`向uart_tx_buffer写字符，函数`consoleread()`被`read(console)`所调用且从uart_tx_buffer中获取字符。
+### 5.4 I/O方式
+I/O操作是指将进行I/O设备和内存的数据交互。有三种数据交互方式：
+1. polling（轮询）：cpu和I/O设备并发运行，程序轮询I/O寄存器，查看数据是否准备好。
+2. 中断：cpu和I/O设备并行运行，I/O设备准备好一字数据后，以中断的方式通知cpu拿走数据。
+3. DMA：I/O设备使用DMA控制器来控制设备到内存的数据传输，一批数据都准备好后才中断cpu。
+
+- 轮询方式cpu会自旋等待浪费cpu资源，但是省去了中断切换操作系统状态的开销。中断方式则正好相反，不会浪费cpu资源，但是需要中断切换操作系统状态的开销（开销并不小，需要很多个指令周期）。
+- 对于频繁申请I/O操作的高速设备，如网卡，可以使用轮询的I/O方式。对于低速设备，如键盘、鼠标，可以使用中断的I/O方式。
+### 5.5 shell打印'$'（字符从程序用户区->console设备）（write(硬件设备)系统调用）的背后逻辑
+`sh.c/fprintf(2, "$ ")`->`printf.c/vprintf(fd, fmt, ap)`->`printf.c/putc(fd, c)`->system call`write()`->`usys.pl/ecall`->`trapoline.S`->`trap.c/usertrap()`->`syscall()`->`sysfile.c/sys_write()`->`file.c/filewrite()`->`console.c/consolewrite()`->`uart.c/uartputc()`->将'\$'放在uart_tx_buffer中->`uart.c/uartstart()`->`WriteReg(THR,c)`->返回，之后uart硬件将'$'发送到console设备上，console画出来。
+### 5.6 键盘敲字到console和用户区中（字符从uart设备->程序用户区/console设备）（设备中断）的背后逻辑
+type 'ls'到uart硬件中->uart产生中断->经过和system call一样的trap机制`trap.c/usertrap()`->`trap.c/devintr()`->`uart.c/uartintr()`->`uart.c/uartgetc()`从uart硬件中读一个字符、`console.c/consoleintr()`将字符累计一行在cons.buf中->`console.c/consoleread()`将cons.buf中的字符copy到用户区->之后返回至用户区的中断处继续执行。
+## 6 Locking
+## 7 Scheduling
+## 8 File system
+## 9 Concurrency revisited
