@@ -260,7 +260,7 @@ I/O操作是指将进行I/O设备和内存的数据交互。有三种数据交�
 - 轮询方式cpu会自旋等待浪费cpu资源，但是省去了中断切换操作系统状态的开销。中断方式则正好相反，不会浪费cpu资源，但是需要中断切换操作系统状态的开销（开销并不小，需要很多个指令周期）。
 - 对于频繁申请I/O操作的高速设备，如网卡，可以使用轮询的I/O方式。对于低速设备，如键盘、鼠标，可以使用中断的I/O方式。
 ### 5.5 shell打印'$'（字符从程序用户区->console设备）（write(硬件设备)系统调用）的背后逻辑
-`sh.c/fprintf(2, "$ ")`->`printf.c/vprintf(fd, fmt, ap)`->`printf.c/putc(fd, c)`->system call`write()`->`usys.pl/ecall`->`trapoline.S`->`trap.c/usertrap()`->`syscall()`->`sysfile.c/sys_write()`->`file.c/filewrite()`->`console.c/consolewrite()`->`uart.c/uartputc()`->将'\$'放在uart_tx_buffer中->`uart.c/uartstart()`->`WriteReg(THR,c)`->返回，之后uart硬件将'$'发送到console设备上，console画出来。
+`sh.c/fprintf(2, "$ ")`->`printf.c/vprintf(fd, fmt, ap)`->`printf.c/putc(fd, c)`->system call`write()`->`usys.pl/ecall`->`trampoline.S`->`trap.c/usertrap()`->`syscall()`->`sysfile.c/sys_write()`->`file.c/filewrite()`->`console.c/consolewrite()`->`uart.c/uartputc()`->将'\$'放在uart_tx_buffer中->`uart.c/uartstart()`->`WriteReg(THR,c)`->返回，之后uart硬件将'$'发送到console设备上，console画出来。
 ### 5.6 键盘敲字到console和用户区中（字符从uart设备->程序用户区/console设备）（设备中断）的背后逻辑
 type 'ls'到uart硬件中->uart产生中断->经过和system call一样的trap机制`trap.c/usertrap()`->`trap.c/devintr()`->`uart.c/uartintr()`->`uart.c/uartgetc()`从uart硬件中读一个字符、`console.c/consoleintr()`将字符累计一行在cons.buf中->`console.c/consoleread()`将cons.buf中的字符copy到用户区->之后返回至用户区的中断处继续执行。
 ## 6 Locking
