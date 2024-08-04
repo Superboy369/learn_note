@@ -84,6 +84,7 @@ CPUs provide a special instruction that switches the CPU from user mode to super
 ### 2.3 Kernel organization
 xv6是*monolithic kernel*（宏内核），与之对应的是*microkernel*（微内核）。是宏微内核取决于内核代码是否全部在内核态下运行，是则是宏内核，不是则是微内核。
 下面是xv6的内核代码构造：
+
 ![image.png](https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/9d857da415744e4a9fbbf7327e210eec~tplv-k3u1fbpfcp-jj-mark:0:0:0:0:q75.image#?w=577&h=729&s=134159&e=png&b=fffefe)
 ### 2.4 Process overview
 在虚拟内存系统中每个进程都有自己独立的从0开始的地址空间。
@@ -260,10 +261,113 @@ I/O操作是指将进行I/O设备和内存的数据交互。有三种数据交�
 - 轮询方式cpu会自旋等待浪费cpu资源，但是省去了中断切换操作系统状态的开销。中断方式则正好相反，不会浪费cpu资源，但是需要中断切换操作系统状态的开销（开销并不小，需要很多个指令周期）。
 - 对于频繁申请I/O操作的高速设备，如网卡，可以使用轮询的I/O方式。对于低速设备，如键盘、鼠标，可以使用中断的I/O方式。
 ### 5.5 shell打印'$'（字符从程序用户区->console设备）（write(硬件设备)系统调用）的背后逻辑
-`sh.c/fprintf(2, "$ ")`->`printf.c/vprintf(fd, fmt, ap)`->`printf.c/putc(fd, c)`->system call`write()`->`usys.pl/ecall`->`trampoline.S`->`trap.c/usertrap()`->`syscall()`->`sysfile.c/sys_write()`->`file.c/filewrite()`->`console.c/consolewrite()`->`uart.c/uartputc()`->将'\$'放在uart_tx_buffer中->`uart.c/uartstart()`->`WriteReg(THR,c)`->返回，之后uart硬件将'$'发送到console设备上，console画出来。
+`sh.c/fprintf(2, "$ ")`->`printf.c/vprintf(fd, fmt, ap)`->`printf.c/putc(fd, c)`->system call`write()`->`usys.pl/ecall`->`trampoline.S`->`trap.c/usertrap()`->`syscall()`->`sysfile.c/sys_write()`->`file.c/filewrite()`->`console.c/consolewrite()`->`uart.c/uartputc()`->将第一个字符'\$'放在uart_tx_buffer中->`uart.c/uartstart()`->`WriteReg(THR,c)`->返回，之后uart硬件将'$'发送到console设备上，console画出来。
+
+每次uart第一个字符发送完，uart都会产生中断->经过和system call一样的trap机制`trap.c/usertrap()`->`trap.c/devintr()`->`uart.c/uartintr()`->`uartgetc()`、`consoleintr(c)`、`uartstart()`->`WriteReg(THR,c)`->返回，之后uart硬件将后续字符发送到console设备上，console画出来。
 ### 5.6 键盘敲字到console和用户区中（字符从uart设备->程序用户区/console设备）（设备中断）的背后逻辑
 type 'ls'到uart硬件中->uart产生中断->经过和system call一样的trap机制`trap.c/usertrap()`->`trap.c/devintr()`->`uart.c/uartintr()`->`uart.c/uartgetc()`从uart硬件中读一个字符、`console.c/consoleintr()`将字符累计一行在cons.buf中->`console.c/consoleread()`将cons.buf中的字符copy到用户区->之后返回至用户区的中断处继续执行。
 ## 6 Locking
 ## 7 Scheduling
 ## 8 File system
+### 8.1 buffer cache layer
+buffer cache 作为外存（磁盘、固态硬盘）在内存中的缓存，其实现保证了：
+* 多个进程对同一块 disk block 访问的互斥性。
+* 根据程序的局部性原理缓存最近可能使用的 disk block ，减少系统对外存的访问，提高访问效率。
+#### 8.1.1 bread()
+bread() 从外存中读取 disk block 内容到 buffer cache 内存中。
+```c
+// Return a locked buf with the contents of the indicated block.
+struct buf*
+bread(uint dev, uint blockno)
+{
+    struct buf *b;
+    b = bget(dev, blockno); // 获取返回的指定设备和 block 号的 buffer cache （没有的话会分配后返回）
+    if(!b->valid) {
+        virtio_disk_rw(b, 0); // 从外存中读内容到 buffer cache 中
+        b->valid = 1;
+    }
+    return b;
+}
+```
+* bread() 中调用 bget() ，bget()会返回上过锁的 buffer cache 块，bget() 返回的指定设备和 block 号的 buffer cache ，没有的话会按照分配后返回。
+```c
+// Look through buffer cache for block on device dev.
+// If not found, allocate a buffer.
+// In either case, return locked buffer.
+static struct buf*
+bget(uint dev, uint blockno)
+{
+    struct buf *b;
+    acquire(&bcache.lock);
+    // Is the block already cached?
+    for(b = bcache.head.next; b != &bcache.head; b = b->next){
+        if(b->dev == dev && b->blockno == blockno){
+            b->refcnt++;
+            release(&bcache.lock);
+            acquiresleep(&b->lock);
+            return b;
+        }
+    }
+    // Not cached.
+    // Recycle the least recently used (LRU) unused buffer.
+    for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
+        if(b->refcnt == 0) {
+            b->dev = dev;
+            b->blockno = blockno;
+            b->valid = 0;
+            b->refcnt = 1;
+            release(&bcache.lock);
+            acquiresleep(&b->lock);
+            return b;
+        }
+    }
+    panic("bget: no buffers");
+}
+```
+#### 8.1.2 bwrite()
+bwrite() 将 buffer cache 内存中的内容写到外存中。
+```c
+// Write b's contents to disk. Must be locked.
+void
+bwrite(struct buf *b)
+{
+    if(!holdingsleep(&b->lock))
+    panic("bwrite");
+    virtio_disk_rw(b, 1);
+}
+```
+#### 8.1.3 buffer cache LRU 替换策略的实现
+* 在 xv6 中使用双向链表实现的 buffer cache 的 LRU 策略，双向链表中头部代表最近刚刚使用完，尾部表示最近最少使用。
+* 双向链表在 xv6 内核启动时初始化好。
+  * 然后在 bread() 调用 bget() 时，如果已经 cache 过，就将 refcnt 加一后返回上锁之后的 buffer cache，如果没有 cache 过，就按照 LRU 策略从后往前扫描双向链表，获取第一个 refcnt == 0 的 buffer cache 上锁之后返回。
+  * 在 caller 使用完 buffer cache 之后调用 brelse() 时，brelse() 会将 refcnt 减一之后，判断 refcnt 是否为0，如果不为0什么也不干直接释放锁，如果为0说明没有一个进程在继续使用这个 buffer cache 了，所以把它移至双向链表头部表示最近经常使用。
+#### 8.1.4 buffer cache 中的锁
+xv6 中的 buffer cache 涉及到两个锁：
+* bcache->lock:保证多个进程对所有 buffer cache 所构成的双向链表的访问。
+* buf 的 lock:保证多个进程对单个 buffer cache 的读写的原子性。
+```c
+struct {
+    struct spinlock lock;
+    struct buf buf[NBUF];
+    // Linked list of all buffers, through prev/next.
+    // Sorted by how recently the buffer was used.
+    // head.next is most recent, head.prev is least.
+    struct buf head;
+} bcache;
+
+struct buf {
+    int valid; // has data been read from disk?
+    int disk; // does disk "own" buf?
+    uint dev;
+    uint blockno;
+    struct sleeplock lock;
+    uint refcnt;
+    struct buf *prev; // LRU cache list
+    struct buf *next;
+    uchar data[BSIZE];
+};
+```
+### 8.2 logging layer
+
+![未命名文件.png](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/471eea40d3e7459fb4db23cbef281d4c~tplv-73owjymdk6-jj-mark:0:0:0:0:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMTUyNjU3NDgzNTg0MjU2NyJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1722871301&x-orig-sign=5wx4fsFto2QsVyK18algFHEN%2FC8%3D)
 ## 9 Concurrency revisited
