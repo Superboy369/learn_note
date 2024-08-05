@@ -368,6 +368,8 @@ struct buf {
 };
 ```
 ### 8.2 logging layer
+#### crash 恢复
 
-![未命名文件.png](https://p0-xtjj-private.juejin.cn/tos-cn-i-73owjymdk6/471eea40d3e7459fb4db23cbef281d4c~tplv-73owjymdk6-jj-mark:0:0:0:0:q75.awebp?policy=eyJ2bSI6MywidWlkIjoiMTUyNjU3NDgzNTg0MjU2NyJ9&rk3s=e9ecf3d6&x-orig-authkey=f32326d3454f2ac7e96d3d06cdbb035152127018&x-orig-expires=1722871301&x-orig-sign=5wx4fsFto2QsVyK18algFHEN%2FC8%3D)
+![xv6 crash恢复](https://github.com/user-attachments/assets/b580dc7c-6946-413f-8490-61a76dd79327)
+
 ## 9 Concurrency revisited
