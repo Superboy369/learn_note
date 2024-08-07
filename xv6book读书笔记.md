@@ -368,7 +368,7 @@ struct buf {
 };
 ```
 ### 8.2 logging layer
-#### crash 恢复
+#### 8.2.1 crash 恢复
 
 ![xv6 crash恢复](https://github.com/user-attachments/assets/b580dc7c-6946-413f-8490-61a76dd79327)
 
