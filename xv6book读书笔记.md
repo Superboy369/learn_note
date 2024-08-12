@@ -269,11 +269,20 @@ type 'ls'到uart硬件中->uart产生中断->经过和system call一样的trap�
 ## 6 Locking
 ## 7 Scheduling
 ## 8 File system
-### 8.1 buffer cache layer
+### 8.1 xv6的文件系统
+xv6的文件系统是存储在 qemu 模拟出来的虚拟磁盘中的。在调用linux命令`make qemu`后:
+1. 自动编译链接内核中的所有.c文件
+2. 创建并且使用编译好的`mkfs`可执行文件将这些文件都写入`fs.img`镜像文件中，并将其加载至 qemu 虚拟磁盘中。
+#### 8.1.1 mkfs文件
+在xv6中mkfs是个c文件，在make编译好之后被`make qemu`执行命令`mkfs/mkfs fs.img README $(UEXTRA) $(UPROGS)`运行可执行文件mkfs
+* mkfs创建打开了`fs.img`文件
+* mkfs将内核中的文件都读到了`fs.img`文件中
+* mkfs初始化了超级块中的数据，主要是定义了文件系统的大小、磁盘块的数量、日志块的数量、日志块的开始编号、inode块的开始编号、bitmap块的开始编号。
+### 8.2 buffer cache layer
 buffer cache 作为外存（磁盘、固态硬盘）在内存中的缓存，其实现保证了：
 * 多个进程对同一块 disk block 访问的互斥性。
 * 根据程序的局部性原理缓存最近可能使用的 disk block ，减少系统对外存的访问，提高访问效率。
-#### 8.1.1 bread()
+#### 8.2.1 bread()
 bread() 从外存中读取 disk block 内容到 buffer cache 内存中。
 ```c
 // Return a locked buf with the contents of the indicated block.
@@ -324,7 +333,7 @@ bget(uint dev, uint blockno)
     panic("bget: no buffers");
 }
 ```
-#### 8.1.2 bwrite()
+#### 8.2.2 bwrite()
 bwrite() 将 buffer cache 内存中的内容写到外存中。
 ```c
 // Write b's contents to disk. Must be locked.
@@ -336,12 +345,12 @@ bwrite(struct buf *b)
     virtio_disk_rw(b, 1);
 }
 ```
-#### 8.1.3 buffer cache LRU 替换策略的实现
+#### 8.2.3 buffer cache LRU 替换策略的实现
 * 在 xv6 中使用双向链表实现的 buffer cache 的 LRU 策略，双向链表中头部代表最近刚刚使用完，尾部表示最近最少使用。
 * 双向链表在 xv6 内核启动时初始化好。
   * 然后在 bread() 调用 bget() 时，如果已经 cache 过，就将 refcnt 加一后返回上锁之后的 buffer cache，如果没有 cache 过，就按照 LRU 策略从后往前扫描双向链表，获取第一个 refcnt == 0 的 buffer cache 上锁之后返回。
   * 在 caller 使用完 buffer cache 之后调用 brelse() 时，brelse() 会将 refcnt 减一之后，判断 refcnt 是否为0，如果不为0什么也不干直接释放锁，如果为0说明没有一个进程在继续使用这个 buffer cache 了，所以把它移至双向链表头部表示最近经常使用。
-#### 8.1.4 buffer cache 中的锁
+#### 8.2.4 buffer cache 中的锁
 xv6 中的 buffer cache 涉及到两个锁：
 * bcache->lock:保证多个进程对所有 buffer cache 所构成的双向链表的访问。
 * buf 的 lock:保证多个进程对单个 buffer cache 的读写的原子性。
@@ -367,9 +376,14 @@ struct buf {
     uchar data[BSIZE];
 };
 ```
-### 8.2 logging layer
-#### 8.2.1 crash 恢复
+### 8.3 logging layer
+#### 8.3.1 crash 恢复
 
-![xv6 crash恢复](https://github.com/user-attachments/assets/b580dc7c-6946-413f-8490-61a76dd79327)
+![xv6 crash恢复](https://github.com/user-attachments/assets/57d3f47a-5644-4d05-9efd-30f191c35c04)
+
+
+#### 8.3.2 xv6文件系统调用log日志实现
+
+![xv6文件系统调用日志具体实现](https://github.com/user-attachments/assets/f11f6c9e-7679-48f5-ae52-0df39382c468)
 
 ## 9 Concurrency revisited
