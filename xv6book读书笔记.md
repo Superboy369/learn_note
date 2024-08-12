@@ -268,6 +268,12 @@ I/O操作是指将进行I/O设备和内存的数据交互。有三种数据交�
 type 'ls'到uart硬件中->uart产生中断->经过和system call一样的trap机制`trap.c/usertrap()`->`trap.c/devintr()`->`uart.c/uartintr()`->`uart.c/uartgetc()`从uart硬件中读一个字符、`console.c/consoleintr()`将字符累计一行在cons.buf中->`console.c/consoleread()`将cons.buf中的字符copy到用户区->之后返回至用户区的中断处继续执行。
 ## 6 Locking
 ## 7 Scheduling
+### 7.1 fork()中父子进程的行为
+
+![fork()系统调用父子进程行为](https://github.com/user-attachments/assets/b8154d5b-85a4-4d17-945c-2c4fd4333fed)
+
+在fork()调用allocproc()为子进程分配pcb（在xv6中是proc结构体）的时候中会将context.ra设置为forkret()函数的地址，因此fork()后的子进程被调度之后会首先跳转到forkret()中，这样做是因为子进程和父进程被切换调度时的断点是不一样的，他们是两个独立调度的进程。
+
 ## 8 File system
 ### 8.1 xv6的文件系统
 xv6的文件系统是存储在 qemu 模拟出来的虚拟磁盘中的。在调用linux命令`make qemu`后:
