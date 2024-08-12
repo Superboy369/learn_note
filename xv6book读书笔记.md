@@ -274,6 +274,163 @@ type 'ls'到uart硬件中->uart产生中断->经过和system call一样的trap�
 
 在fork()调用allocproc()为子进程分配pcb（在xv6中是proc结构体）的时候中会将context.ra设置为forkret()函数的地址，因此fork()后的子进程被调度之后会首先跳转到forkret()中，这样做是因为子进程和父进程被切换调度时的断点是不一样的，他们是两个独立调度的进程。
 
+### 7.2 进程切换过程
+cpu的执行流不断在不同进程和cpu调度器代码中来回切换。进程要么主动调用sleep()释放cpu，sleep()最终调用swtch()切换到cpu调度器代码中的swtch()，要么当进程被时钟中断后被动调用yield()释放cpu，yield()最终调用swtch()切换到cpu调度器代码中的swtch()（切换当前进程上下文为cpu调度器上下文）。cpu调度器则会从swtch()继续执行，寻找下一个RUNNABLE的进程，并调用swtch()切换到被调度进程代码中的swtch()（切换cpu调度器上下文为被调度进程上下文），这样就完成了进程的调度和进程上下文的保存切换。
+```c
+//
+// handle an interrupt, exception, or system call from user space.
+// called from trampoline.S
+//
+void
+usertrap(void)
+{
+    int which_dev = 0;
+    if((r_sstatus() & SSTATUS_SPP) != 0)
+        panic("usertrap: not from user mode");
+    // send interrupts and exceptions to kerneltrap(),
+    // since we're now in the kernel.
+    w_stvec((uint64)kernelvec);
+    struct proc *p = myproc();
+    // save user program counter.
+    p->trapframe->epc = r_sepc();
+    if(r_scause() == 8){
+        // system call
+        if(p->killed)
+            exit(-1);
+        // sepc points to the ecall instruction,
+        // but we want to return to the next instruction.
+        p->trapframe->epc += 4;
+        // an interrupt will change sstatus &c registers,
+        // so don't enable until done with those registers.
+        intr_on();
+        syscall();
+    } else if((which_dev = devintr()) != 0){
+        // ok
+    } else {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf(" sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+    }
+    if(p->killed)
+        exit(-1);
+    // give up the CPU if this is a timer interrupt.
+    if(which_dev == 2)
+        yield();  // 当前进程在时钟中断时内核调用yield()被动释放cpu
+    usertrapret();
+}
+```
+```c
+// Give up the CPU for one scheduling round.
+void
+yield(void)
+{
+    struct proc *p = myproc();
+    acquire(&p->lock);  
+    p->state = RUNNABLE;
+    sched();  // 当前进程被动调用sched()
+    release(&p->lock);  
+}
+```
+```c
+// Atomically release lock and sleep on chan.
+// Reacquires lock when awakened.
+void
+sleep(void *chan, struct spinlock *lk)
+{
+    struct proc *p = myproc();
+    // Must acquire p->lock in order to
+    // change p->state and then call sched.
+    // Once we hold p->lock, we can be
+    // guaranteed that we won't miss any wakeup
+    // (wakeup locks p->lock),
+    // so it's okay to release lk.
+    if(lk != &p->lock){ //DOC: sleeplock0
+        acquire(&p->lock); //DOC: sleeplock1  
+        release(lk); 
+    }
+    // Go to sleep.
+    p->chan = chan;
+    p->state = SLEEPING;
+    sched();  // 当前进程主动调用sleep()放弃cpu，主动调用sched()
+    // Tidy up.
+    p->chan = 0;
+    // Reacquire original lock.
+    if(lk != &p->lock){
+        release(&p->lock);  
+        acquire(lk);  
+    }
+}
+```
+```c
+// Switch to scheduler. Must hold only p->lock
+// and have changed proc->state. Saves and restores
+// intena because intena is a property of this
+// kernel thread, not this CPU. It should
+// be proc->intena and proc->noff, but that would
+// break in the few places where a lock is held but
+// there's no process.
+void
+sched(void)
+{
+    int intena;
+    struct proc *p = myproc();
+    if(!holding(&p->lock))
+        panic("sched p->lock");
+    if(mycpu()->noff != 1)
+    panic("sched locks");
+    if(p->state == RUNNING)
+        panic("sched running");
+    if(intr_get())
+        panic("sched interruptible");
+    intena = mycpu()->intena;
+    swtch(&p->context, &mycpu()->context);  // sched()最终调用swtch()保存当前进程上下文，回复cpu调度器上下文 
+    mycpu()->intena = intena;
+}
+```
+```c
+// Per-CPU process scheduler.
+// Each CPU calls scheduler() after setting itself up.
+// Scheduler never returns. It loops, doing:
+// - choose a process to run.
+// - swtch to start running that process.
+// - eventually that process transfers control
+// via swtch back to the scheduler.
+void
+scheduler(void)
+{
+    struct proc *p;
+    struct cpu *c = mycpu();
+    c->proc = 0;
+    for(;;){
+        // Avoid deadlock by ensuring that devices can interrupt.
+        intr_on();
+        int nproc = 0;
+            for(p = proc; p < &proc[NPROC]; p++) {
+                acquire(&p->lock); 
+                if(p->state != UNUSED) {
+                    nproc++;
+                }
+                if(p->state == RUNNABLE) {
+                    // Switch to chosen process. It is the process's job
+                    // to release its lock and then reacquire it
+                    // before jumping back to us.
+                    p->state = RUNNING;
+                    c->proc = p;
+                    swtch(&c->context, &p->context);  // 每个cpu调度器scheduler()调用swtch()保存cpu调度器的上下文，回复被调度进程的上下文
+                    // Process is done running for now.
+                    // It should have changed its p->state before coming back.
+                    c->proc = 0;
+                }
+                release(&p->lock); 
+            }
+            if(nproc <= 2) { // only init and sh exist
+            intr_on();
+            asm volatile("wfi");
+        }
+    }
+}
+```
+
 ## 8 File system
 ### 8.1 xv6的文件系统
 xv6的文件系统是存储在 qemu 模拟出来的虚拟磁盘中的。在调用linux命令`make qemu`后:
