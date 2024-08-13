@@ -447,6 +447,28 @@ scheduler(void)
 ![fork()系统调用父子进程行为](https://github.com/user-attachments/assets/b8154d5b-85a4-4d17-945c-2c4fd4333fed)
 
 在fork()调用allocproc()为子进程分配pcb（在xv6中是proc结构体）的时候中会将context.ra设置为forkret()函数的地址，因此fork()后的子进程被调度之后会首先跳转到forkret()中，这样做是因为子进程和父进程被切换调度时的断点是不一样的，他们是两个独立调度的进程。
+```c
+// A fork child's very first scheduling by scheduler()
+// will swtch to forkret.
+void
+forkret(void)
+{
+  static int first = 1;
+
+  // Still holding p->lock from scheduler.
+  release(&myproc()->lock);
+
+  if (first) {
+    // File system initialization must be run in the context of a
+    // regular process (e.g., because it calls sleep), and thus cannot
+    // be run from main().
+    first = 0;
+    fsinit(ROOTDEV);
+  }
+
+  usertrapret();
+}
+```
 
 ### 7.3 进程切换中对于进程锁和非进程锁的行为
 
@@ -838,5 +860,21 @@ struct buf {
 #### 8.3.2 xv6文件系统调用log日志实现
 
 ![xv6文件系统调用日志具体实现](https://github.com/user-attachments/assets/f11f6c9e-7679-48f5-ae52-0df39382c468)
+
+#### 8.3.3 xv6具体crash恢复流程
+
+![xv6_crash恢复流程](https://github.com/user-attachments/assets/5e871c0e-bf5a-4554-92de-6195fc0b6331)
+
+xv6crash恢复是在forkret()中恢复的，而forkret()只有在fork()后的子进程第一次被cpu scheduler()调用的时候会调用。
+```c
+static void
+recover_from_log(void)
+{
+  read_head();
+  install_trans(1); // if committed, copy from log to disk
+  log.lh.n = 0;
+  write_head(); // clear the log
+}
+```
 
 ## 9 Concurrency revisited
