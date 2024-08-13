@@ -860,6 +860,135 @@ struct buf {
 #### 8.3.2 xv6文件系统调用log日志实现
 
 ![xv6文件系统调用日志具体实现](https://github.com/user-attachments/assets/f11f6c9e-7679-48f5-ae52-0df39382c468)
+```c
+// Caller has modified b->data and is done with the buffer.
+// Record the block number and pin in the cache by increasing refcnt.
+// commit()/write_log() will do the disk write.
+//
+// log_write() replaces bwrite(); a typical use is:
+//   bp = bread(...)
+//   modify bp->data[]
+//   log_write(bp)
+//   brelse(bp)
+void
+log_write(struct buf *b)
+{
+  int i;
+
+  if (log.lh.n >= LOGSIZE || log.lh.n >= log.size - 1)
+    panic("too big a transaction");
+  if (log.outstanding < 1)
+    panic("log_write outside of trans");
+
+  acquire(&log.lock);
+  for (i = 0; i < log.lh.n; i++) {
+    if (log.lh.block[i] == b->blockno)   // log absorbtion
+      break;
+  }
+  log.lh.block[i] = b->blockno;
+  if (i == log.lh.n) {  // Add new block to log?
+    bpin(b);
+    log.lh.n++;
+  }
+  release(&log.lock);
+}
+
+// called at the end of each FS system call.
+// commits if this was the last outstanding operation.
+void
+end_op(void)
+{
+  int do_commit = 0;
+
+  acquire(&log.lock);
+  log.outstanding -= 1;
+  if(log.committing)
+    panic("log.committing");
+  if(log.outstanding == 0){
+    do_commit = 1;
+    log.committing = 1;
+  } else {
+    // begin_op() may be waiting for log space,
+    // and decrementing log.outstanding has decreased
+    // the amount of reserved space.
+    wakeup(&log);
+  }
+  release(&log.lock);
+
+  if(do_commit){
+    // call commit w/o holding locks, since not allowed
+    // to sleep with locks.
+    commit();
+    acquire(&log.lock);
+    log.committing = 0;
+    wakeup(&log);
+    release(&log.lock);
+  }
+}
+
+static void
+commit()
+{
+  if (log.lh.n > 0) {
+    write_log();     // Write modified blocks from cache to log
+    write_head();    // Write header to disk -- the real commit
+    install_trans(0); // Now install writes to home locations
+    log.lh.n = 0;
+    write_head();    // Erase the transaction from the log
+  }
+}
+
+// Copy modified blocks from cache to log.
+static void
+write_log(void)
+{
+  int tail;
+
+  for (tail = 0; tail < log.lh.n; tail++) {
+    struct buf *to = bread(log.dev, log.start+tail+1); // log block
+    struct buf *from = bread(log.dev, log.lh.block[tail]); // cache block
+    memmove(to->data, from->data, BSIZE);
+    bwrite(to);  // write the log
+    brelse(from);
+    brelse(to);
+  }
+}
+
+// Write in-memory log header to disk.
+// This is the true point at which the
+// current transaction commits.
+static void
+write_head(void)
+{
+  struct buf *buf = bread(log.dev, log.start);
+  struct logheader *hb = (struct logheader *) (buf->data);
+  int i;
+  hb->n = log.lh.n;
+  for (i = 0; i < log.lh.n; i++) {
+    hb->block[i] = log.lh.block[i];
+  }
+  bwrite(buf);
+  brelse(buf);
+}
+
+// Copy committed blocks from log to their home location
+static void
+install_trans(int recovering)
+{
+  int tail;
+
+  for (tail = 0; tail < log.lh.n; tail++) {
+    struct buf *lbuf = bread(log.dev, log.start+tail+1); // read log block
+    struct buf *dbuf = bread(log.dev, log.lh.block[tail]); // read dst
+    memmove(dbuf->data, lbuf->data, BSIZE);  // copy block to dst
+    bwrite(dbuf);  // write dst to disk
+    if(recovering == 0)
+      bunpin(dbuf);
+    brelse(lbuf);
+    brelse(dbuf);
+  }
+}
+```
 
 #### 8.3.3 xv6具体crash恢复流程
 
@@ -876,5 +1005,30 @@ recover_from_log(void)
   write_head(); // clear the log
 }
 ```
+
+#### 8.3.4 其他一些挑战
+##### 8.3.4.1 涉及log block的cache驱逐
+如果buffer cache要驱逐还未写入log block的block至实际的block中，这会出现问题，因为log设计需要buffer cache块中的block必须先写入log block，再写入实际block中。xv6是通过将`refcnt + 1`来解决这个问题的。在log_write()更新log结构体的时候调用bpin() refcnt + 1，当install_trans() install log之后调用bunpin() refcnt - 1。
+```c
+void
+bpin(struct buf *b) {
+  acquire(&bcache.lock);
+  b->refcnt++;
+  release(&bcache.lock);
+}
+
+void
+bunpin(struct buf *b) {
+  acquire(&bcache.lock);
+  b->refcnt--;
+  release(&bcache.lock);
+}
+```
+
+##### 8.3.4.2 fs op must fit in log
+log block数量必须大于fs一次性写入block的最大数量，因为一次性写入block数量太大会导致log block装不下一次写入的数据，导致破坏了log实现的不变性。当一次写入数量较大的block时（写很多数据到文件中），xv6会将一个写入事务拆分未多个较小的事务来进行写入操作。
+
+##### 8.3.4.3 多个进程事务的并发
+多个进程的fs system call可能会导致log block数量不够，xv6通过限制并发的fs system syscall的数量来避免。
 
 ## 9 Concurrency revisited
