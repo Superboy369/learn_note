@@ -115,6 +115,16 @@ xv6每个进程一个自己的用户页表和一个共用的内核页表，这�
 ![image.png](https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/3372b932b2604b7ab97e6ae945584315~tplv-k3u1fbpfcp-jj-mark:0:0:0:0:q75.image#?w=825&h=823&s=86544&e=png&b=fefefe)
 内核地址空间都是直接映射，但是除了trampoline页和每个进程对应的内核栈被映射了两次，一次直接映射，一次虚拟高地址映射。
 ## 4 Traps and system calls
+### 4.1 内核态和用户态之间的切换
+
+*   用户态->内核态：内中断时用户态下执行特殊指令ecall，切换CPU位状态用户态为内核态，外中断时信号线改变cpu位状态。
+*   内核态->用户态：内中断返回时内核态下执行和ecall相反的特殊指令sret，切换CPU位状态内核态为用户态。
+*   ecall和sret指令的四件事情：
+    *   关中断 */* 开中断
+    *   用户态->内核态 */* 内核态->用户态
+    *   pc->sepc、stvec->pc */* sepc->pc
+    *   跳转至pc所指地址继续执行汇编代码
+
 ## 5 Interrupts and device drivers
 ### 5.1 操作系统控制设备的方式
 操作系统以memory mapped的方式将设备控制寄存器mapped到物理内存，使得可以使用汇编指令来进行设备的控制。
@@ -267,14 +277,16 @@ I/O操作是指将进行I/O设备和内存的数据交互。有三种数据交�
 ### 5.6 键盘敲字到console和用户区中（字符从uart设备->程序用户区/console设备）（设备中断）的背后逻辑
 type 'ls'到uart硬件中->uart产生中断->经过和system call一样的trap机制`trap.c/usertrap()`->`trap.c/devintr()`->`uart.c/uartintr()`->`uart.c/uartgetc()`从uart硬件中读一个字符、`console.c/consoleintr()`将字符累计一行在cons.buf中->`console.c/consoleread()`将cons.buf中的字符copy到用户区->之后返回至用户区的中断处继续执行。
 ## 6 Locking
+### 6.1 锁
+
+锁在xv6操作系统中就是一个结构体，里面包含了locked字段和一些用于debug的字段（name、持有锁的cpu）。
+
+*   acquire(\&lock)会先关中断，再利用硬件原子执行test\_and\_set locked字段。
+*   release(\&lock)会先利用硬件原子执行test\_and\_set locked字段，再开中断。
+*   开关中断意味着在临界区代码中无法中断，因为在临界区中断可能导致死锁（普通程序在acquire()之后被中断，之后中断处理程序对同一把锁上锁导致死锁）。
+
 ## 7 Scheduling
-### 7.1 fork()中父子进程的行为
-
-![fork()系统调用父子进程行为](https://github.com/user-attachments/assets/b8154d5b-85a4-4d17-945c-2c4fd4333fed)
-
-在fork()调用allocproc()为子进程分配pcb（在xv6中是proc结构体）的时候中会将context.ra设置为forkret()函数的地址，因此fork()后的子进程被调度之后会首先跳转到forkret()中，这样做是因为子进程和父进程被切换调度时的断点是不一样的，他们是两个独立调度的进程。
-
-### 7.2 进程切换过程
+### 7.1 进程切换过程
 cpu的执行流不断在不同进程和cpu调度器代码中来回切换。进程要么主动调用sleep()释放cpu，sleep()最终调用swtch()切换到cpu调度器代码中的swtch()，要么当进程被时钟中断后被动调用yield()释放cpu，yield()最终调用swtch()切换到cpu调度器代码中的swtch()（切换当前进程上下文为cpu调度器上下文）。cpu调度器则会从swtch()继续执行，寻找下一个RUNNABLE的进程，并调用swtch()切换到被调度进程代码中的swtch()（切换cpu调度器上下文为被调度进程上下文），这样就完成了进程的调度和进程上下文的保存切换。
 ```c
 //
@@ -428,6 +440,284 @@ scheduler(void)
             asm volatile("wfi");
         }
     }
+}
+```
+### 7.2 fork()中父子进程的行为
+
+![fork()系统调用父子进程行为](https://github.com/user-attachments/assets/b8154d5b-85a4-4d17-945c-2c4fd4333fed)
+
+在fork()调用allocproc()为子进程分配pcb（在xv6中是proc结构体）的时候中会将context.ra设置为forkret()函数的地址，因此fork()后的子进程被调度之后会首先跳转到forkret()中，这样做是因为子进程和父进程被切换调度时的断点是不一样的，他们是两个独立调度的进程。
+
+### 7.3 进程切换中对于进程锁和非进程锁的行为
+
+*   在进程切换前要持有当前进程的锁并且释放出当前进程锁的其他锁之后在切换至其他进程。
+*   在进程切换之前/后（yield()和sleep()调用sched()(swtch())之前/后）要持有/释放当前要下处理机的进程的锁的原因是：如果不持有当前进程锁，多个cpu scheduler()在调度进程时都调度同一个进程上处理机。
+*   在进程切换之前/后（yield()和sleep()调用sched()/swtch()之前/后）要释放/持有除当前要下处理机的进程的锁之外的其他所有设备锁的原因是：如果不释放，会导致死锁，当调度到的其他进程在对该设备上锁时会关中断并进入自旋等待，而持有该设备锁的进程由于该cpu关了中断而无法上处理机释放锁，导致死锁。
+
+```c
+// Per-CPU process scheduler.
+// Each CPU calls scheduler() after setting itself up.
+// Scheduler never returns. It loops, doing:
+// - choose a process to run.
+// - swtch to start running that process.
+// - eventually that process transfers control
+// via swtch back to the scheduler.
+void
+scheduler(void)
+{
+    struct proc *p;
+    struct cpu *c = mycpu();
+    c->proc = 0;
+    for(;;){
+        // Avoid deadlock by ensuring that devices can interrupt.
+        intr_on();
+        int nproc = 0;
+            for(p = proc; p < &proc[NPROC]; p++) {
+                acquire(&p->lock);  // @@@获取当前进程锁
+                if(p->state != UNUSED) {
+                    nproc++;
+                }
+                if(p->state == RUNNABLE) {
+                    // Switch to chosen process. It is the process's job
+                    // to release its lock and then reacquire it
+                    // before jumping back to us.
+                    p->state = RUNNING;
+                    c->proc = p;
+                    swtch(&c->context, &p->context);
+                    // Process is done running for now.
+                    // It should have changed its p->state before coming back.
+                    c->proc = 0;
+                }
+                release(&p->lock);  // @@@释放当前进程锁
+            }
+            if(nproc <= 2) { // only init and sh exist
+            intr_on();
+            asm volatile("wfi");
+        }
+    }
+}
+```
+
+```c
+// Give up the CPU for one scheduling round.
+void
+yield(void)
+{
+    struct proc *p = myproc();
+    acquire(&p->lock);  // @@@获取当前进程锁
+    p->state = RUNNABLE;
+    sched();
+    release(&p->lock);  // @@@释放当前进程锁
+}
+```
+
+```c
+// Atomically release lock and sleep on chan.
+// Reacquires lock when awakened.
+void
+sleep(void *chan, struct spinlock *lk)
+{
+    struct proc *p = myproc();
+    // Must acquire p->lock in order to
+    // change p->state and then call sched.
+    // Once we hold p->lock, we can be
+    // guaranteed that we won't miss any wakeup
+    // (wakeup locks p->lock),
+    // so it's okay to release lk.
+    if(lk != &p->lock){ //DOC: sleeplock0
+        acquire(&p->lock); //DOC: sleeplock1  // @@@获取当前进程锁
+        release(lk);  // @@@@释放非进程锁
+    }
+    // Go to sleep.
+    p->chan = chan;
+    p->state = SLEEPING;
+    sched();
+    // Tidy up.
+    p->chan = 0;
+    // Reacquire original lock.
+    if(lk != &p->lock){
+        release(&p->lock);  // @@@释放当前进程锁
+        acquire(lk);  // @@@@重新对非进程锁上锁
+    }
+}
+```
+
+```c
+// Wake up all processes sleeping on chan.
+// Must be called without any p->lock.
+void
+wakeup(void *chan)
+{
+    struct proc *p;
+    for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);  // @@@获取当前进程锁
+        if(p->state == SLEEPING && p->chan == chan) {
+            p->state = RUNNABLE;
+        }
+        release(&p->lock);  // @@@释放当前进程锁
+    }
+}
+```
+
+```c
+// handle a uart interrupt, raised because input has
+// arrived, or the uart is ready for more output, or
+// both. called from trap.c.
+void
+uartintr(void)
+{
+    // read and process incoming characters.
+    while(1){
+        int c = uartgetc();
+        if(c == -1)
+            break;
+        consoleintr(c);
+    }
+    // send buffered characters.
+    acquire(&uart_tx_lock);  // @@@@互斥访问uart
+    uartstart();
+    release(&uart_tx_lock);  // @@@@互斥访问uart
+}
+```
+
+### 7.4 进程的退出和终止
+
+xv6有两种停止进程的方式：1.exit()，2.kill()：
+
+*   exit():exit()只是关文件，设置当前进程state为ZOMBIE，并调用sched()，真正资源的free在父进程被调度运行wait()时，子进程的资源由父进程来关闭。init()进程会作为所有无父进程进程的父进程调用wait()释放其子进程的资源。
+*   kill():kill()系统调用只是设置p->killed字段为1，并设置进程state为RUNNABLE，进程被调度运行时用于中断陷入usertrap()中，在usertrap()中判断p->killed为1调用exit(-1)。
+*   所有main()函数最后都会隐式的调用exit()函数来让父进程释放资源。
+*   这些资源包括页表、trapframe、物理页、一系列proc结构体中的数据。
+
+```c
+// Exit the current process. Does not return.
+// An exited process remains in the zombie state
+// until its parent calls wait().
+void
+exit(int status)
+{
+    struct proc *p = myproc();
+    if(p == initproc)
+        panic("init exiting");
+    // Close all open files.
+    for(int fd = 0; fd < NOFILE; fd++){
+        if(p->ofile[fd]){
+            struct file *f = p->ofile[fd];
+            fileclose(f);
+            p->ofile[fd] = 0;
+        }
+    }
+    begin_op();
+    iput(p->cwd);
+    end_op();
+    p->cwd = 0;
+        // we might re-parent a child to init. we can't be precise about
+    // waking up init, since we can't acquire its lock once we've
+    // acquired any other proc lock. so wake up init whether that's
+    // necessary or not. init may miss this wakeup, but that seems
+    // harmless.
+    acquire(&initproc->lock);
+    wakeup1(initproc);
+    release(&initproc->lock);
+    // grab a copy of p->parent, to ensure that we unlock the same
+    // parent we locked. in case our parent gives us away to init while
+    // we're waiting for the parent lock. we may then race with an
+    // exiting parent, but the result will be a harmless spurious wakeup
+    // to a dead or wrong process; proc structs are never re-allocated
+    // as anything else.
+    acquire(&p->lock);
+    struct proc *original_parent = p->parent;
+    release(&p->lock);
+    // we need the parent's lock in order to wake it up from wait().
+    // the parent-then-child rule says we have to lock it first.
+    acquire(&original_parent->lock);
+    acquire(&p->lock);
+    // Give any children to init.
+    reparent(p);
+    // Parent might be sleeping in wait().
+    wakeup1(original_parent);
+    p->xstate = status;
+    p->state = ZOMBIE;
+    release(&original_parent->lock);
+    // Jump into the scheduler, never to return.
+    sched();
+    panic("zombie exit");
+}
+```
+
+```c
+// Wait for a child process to exit and return its pid.
+// Return -1 if this process has no children.
+int
+wait(uint64 addr)
+{
+    struct proc *np;
+    int havekids, pid;
+    struct proc *p = myproc();
+    // hold p->lock for the whole time to avoid lost
+    // wakeups from a child's exit().
+    acquire(&p->lock);
+    for(;;){
+        // Scan through table looking for exited children.
+        havekids = 0;
+        for(np = proc; np < &proc[NPROC]; np++){
+            // this code uses np->parent without holding np->lock.
+            // acquiring the lock first would cause a deadlock,
+            // since np might be an ancestor, and we already hold p->lock.
+            if(np->parent == p){
+                // np->parent can't change between the check and the acquire()
+                // because only the parent changes it, and we're the parent.
+                acquire(&np->lock);
+                havekids = 1;
+                if(np->state == ZOMBIE){
+                    // Found one.
+                    pid = np->pid;
+                    if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,sizeof(np->xstate)) < 0) {
+                        release(&np->lock);
+                        release(&p->lock);
+                        return -1;
+                    }
+                    freeproc(np);
+                    release(&np->lock);
+                    release(&p->lock);
+                    return pid;
+                }
+                release(&np->lock);
+            }
+        }
+        // No point waiting if we don't have any children.
+        if(!havekids || p->killed){
+            release(&p->lock);
+            return -1;
+        }
+        // Wait for a child to exit.
+        sleep(p, &p->lock); //DOC: wait-sleep
+    }
+}
+```
+
+```c
+// Kill the process with the given pid.
+// The victim won't exit until it tries to return
+// to user space (see usertrap() in trap.c).
+int
+kill(int pid)
+{
+    struct proc *p;
+    for(p = proc; p < &proc[NPROC]; p++){
+        acquire(&p->lock);
+        if(p->pid == pid){
+            p->killed = 1;
+            if(p->state == SLEEPING){
+                // Wake process from sleep().
+                p->state = RUNNABLE;
+            }
+            release(&p->lock);
+            return 0;
+        }
+        release(&p->lock);
+    }
+    return -1;
 }
 ```
 
