@@ -1031,4 +1031,85 @@ log block数量必须大于fs一次性写入block的最大数量，因为一次�
 ##### 8.3.4.3 多个进程事务的并发
 多个进程的fs system call可能会导致log block数量不够，xv6通过限制并发的fs system syscall的数量来避免。
 
+### 8.4 inode layer
+#### 8.4.1 inode layer和log layer下的系统调用流程
+
+![inode layer和log layer的exec()系统调用流程](https://github.com/user-attachments/assets/8963ea38-525e-40a3-a868-51d43299363e)
+
+![inode layer和log layer的read()系统调用流程](https://github.com/user-attachments/assets/816f9ec8-5ebb-4c19-9d11-ba106f260f21)
+
+![inode layer和log layer的write()系统调用流程](https://github.com/user-attachments/assets/a5feb251-9d0c-4ddb-9420-e18004438888)
+
+* readi()读取inode所指中的block内容至指定内存中。具体是根据指定的cache在icache中的inode中的block#，读取block内容至buffer cache中，再把buffer cache中内容复制到传入地址所指内存中。
+* writei()将指定内存中的内容写到buffer cache中。具体是根据指定的cache在icache中的inode中的block#，读取block内容至buffer cache中，再把传入地址所知内存内容复制到buffer cache，以备后续log日志系统写入磁盘。
+
+```c
+// Read data from inode.
+// Caller must hold ip->lock.
+// If user_dst==1, then dst is a user virtual address;
+// otherwise, dst is a kernel address.
+int
+readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
+{
+  uint tot, m;
+  struct buf *bp;
+
+  if(off > ip->size || off + n < off)
+    return 0;
+  if(off + n > ip->size)
+    n = ip->size - off;
+
+  for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
+    bp = bread(ip->dev, bmap(ip, off/BSIZE));
+    m = min(n - tot, BSIZE - off%BSIZE);
+    if(either_copyout(user_dst, dst, bp->data + (off % BSIZE), m) == -1) {
+      brelse(bp);
+      tot = -1;
+      break;
+    }
+    brelse(bp);
+  }
+  return tot;
+}
+
+// Write data to inode.
+// Caller must hold ip->lock.
+// If user_src==1, then src is a user virtual address;
+// otherwise, src is a kernel address.
+int
+writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
+{
+  uint tot, m;
+  struct buf *bp;
+
+  if(off > ip->size || off + n < off)
+    return -1;
+  if(off + n > MAXFILE*BSIZE)
+    return -1;
+
+  for(tot=0; tot<n; tot+=m, off+=m, src+=m){
+    bp = bread(ip->dev, bmap(ip, off/BSIZE));
+    m = min(n - tot, BSIZE - off%BSIZE);
+    if(either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
+      brelse(bp);
+      n = -1;
+      break;
+    }
+    log_write(bp);
+    brelse(bp);
+  }
+
+  if(n > 0){
+    if(off > ip->size)
+      ip->size = off;
+    // write the i-node back to disk even if the size didn't change
+    // because the loop above might have called bmap() and added a new
+    // block to ip->addrs[].
+    iupdate(ip);
+  }
+
+  return n;
+}
+```
+
 ## 9 Concurrency revisited
