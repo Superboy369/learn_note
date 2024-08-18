@@ -1112,4 +1112,17 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 }
 ```
 
+#### 8.4.2 系统调用对inode的使用
+
+![ialloc()对disk inode 和icache inode的分配](https://github.com/user-attachments/assets/92b22e8e-76cb-481d-84ef-55bf9f119e39)
+
+![exec()中对inode的使用](https://github.com/user-attachments/assets/5d03bd2c-6b84-4c49-8e88-19663fa00b35)
+
+![exit()对inode使用完成](https://github.com/user-attachments/assets/9070aad9-c92b-497b-af53-7ab6473b6530)
+
+* ialloc()进行对disk inode和icache inode的分配。
+* iget()进行对icache inode的引用和获取（如果没有则分配）。
+* iput()进行对icache inode的减引用和写回disk inode（如果inode refcnt未0就写回磁盘）。
+* 期间所有系统调用使用的inode都是icache中的inode，因此上面exec()、read()、write()系统调用中readi()和writei()对inode的读取都是使用的是icache inode。
+
 ## 9 Concurrency revisited
