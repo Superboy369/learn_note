@@ -1125,4 +1125,115 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 * iput()进行对icache inode的减引用和写回disk inode（如果inode refcnt未0就写回磁盘）。
 * 期间所有系统调用使用的inode都是icache中的inode，因此上面exec()、read()、write()系统调用中readi()和writei()对inode的读取都是使用的是icache inode。
 
+### 8.5 directory layer
+#### 8.5.1 获取指定路径文件的inode过程
+
+![获取指定路径文件的inode过程](https://github.com/user-attachments/assets/d7802d69-c21b-4a94-8ea1-b3eb0123829f)
+
+### 8.6 file descriptor layer
+#### 8.6.1 xv6 fd实现
+```c
+// Per-process state
+struct proc {
+  struct spinlock lock;
+
+  // p->lock must be held when using these:
+  enum procstate state;        // Process state
+  struct proc *parent;         // Parent process
+  void *chan;                  // If non-zero, sleeping on chan
+  int killed;                  // If non-zero, have been killed
+  int xstate;                  // Exit status to be returned to parent's wait
+  int pid;                     // Process ID
+
+  // these are private to the process, so p->lock need not be held.
+  uint64 kstack;               // Virtual address of kernel stack
+  uint64 sz;                   // Size of process memory (bytes)
+  pagetable_t pagetable;       // User page table
+  struct trapframe *trapframe; // data page for trampoline.S
+  struct context context;      // swtch() here to run process
+  struct file *ofile[NOFILE];  // Open files
+  struct inode *cwd;           // Current directory
+  char name[16];               // Process name (debugging)
+};
+
+struct file {
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
+
+struct {
+  struct spinlock lock;
+  struct file file[NFILE];
+} ftable;
+```
+每个进程结构体中一个打开的文件file指针数组，而fd文件描述符就是这个数组的索引下标。
+
+![文件结构体以及文件描述符的分配](https://github.com/user-attachments/assets/94e18412-5f84-4363-9d9e-0285c49cb21b)
+
+```c
+uint64
+sys_read(void)
+{
+  struct file *f;
+  int n;
+  uint64 p;
+
+  if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0)
+    return -1;
+  return fileread(f, p, n);
+}
+
+// Fetch the nth word-sized system call argument as a file descriptor
+// and return both the descriptor and the corresponding struct file.
+static int
+argfd(int n, int *pfd, struct file **pf)
+{
+  int fd;
+  struct file *f;
+
+  if(argint(n, &fd) < 0)
+    return -1;
+  if(fd < 0 || fd >= NOFILE || (f=myproc()->ofile[fd]) == 0)
+    return -1;
+  if(pfd)
+    *pfd = fd;
+  if(pf)
+    *pf = f;
+  return 0;
+}
+
+// Read from file f.
+// addr is a user virtual address.
+int
+fileread(struct file *f, uint64 addr, int n)
+{
+  int r = 0;
+
+  if(f->readable == 0)
+    return -1;
+
+  if(f->type == FD_PIPE){
+    r = piperead(f->pipe, addr, n);
+  } else if(f->type == FD_DEVICE){
+    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
+      return -1;
+    r = devsw[f->major].read(1, addr, n);
+  } else if(f->type == FD_INODE){
+    ilock(f->ip);
+    if((r = readi(f->ip, 1, addr, f->off, n)) > 0)
+      f->off += r;
+    iunlock(f->ip);
+  } else {
+    panic("fileread");
+  }
+
+  return r;
+}
+```
 ## 9 Concurrency revisited
