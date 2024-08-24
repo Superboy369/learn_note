@@ -72,7 +72,7 @@ The `dup()` system call creates a copy of a file descriptor.
 这里使用了两次重定向，`fork()`了两次，但由于执行了`runcmd()`，因此只有两个子进程，一个子进程重定向了标准输出后执行`|`左边的命令，一个子进程重定向了标准输出后执行`|`右边的命令。
 * pipe()系统调用创建了管道，管道是内核的缓冲区，自带进程间的同步效果。
 ##### 1.2.2.1 pipe()创建管道内核具体实现
-。。。未完待续
+[见第八章File system 8.6.2pipe(p)管道内核实现](#8.6.2-pipe(p)管道内核实现)
 ### 1.3 文件系统
 。。。后续会讲
 ## 2 Operating system organization
@@ -1236,4 +1236,7 @@ fileread(struct file *f, uint64 addr, int n)
   return r;
 }
 ```
+
+#### 8.6.2 pipe(p)管道内核实现
+
 ## 9 Concurrency revisited
