@@ -1,7 +1,7 @@
 # xv6 book 读书笔记
 ## 1 Operating system interfaces
 ### 1.1 系统调用
-。。。后续会讲
+[见第四章Traps and system calls](#4-Traps-and-system-calls)
 ### 1.2 文件描述符、管道
 A process may obtain a file descriptor by opening a file, directory, or device, or by creating a pipe, or by duplicating an existing descriptor.             
 the xv6 kernel uses the file descriptor as an index into a per-process table, so that every process has a private space of file descriptors starting at zero.
@@ -76,7 +76,7 @@ The `dup()` system call creates a copy of a file descriptor.
 [见第八章File system 8.6.2 pipe(p)管道内核实现](#862-pipep管道内核实现)
 
 ### 1.3 文件系统
-。。。后续会讲
+[见第八章File system](#8-File-system)
 ## 2 Operating system organization
 ### 2.1 Abstracting physical resources
 前面一章的接口给物理资源提供了一层抽象，操作系统使得进程可以分时复用硬件、共享硬件，并提供进程之间的隔离性与交互性。
@@ -126,6 +126,10 @@ xv6每个进程一个自己的用户页表和一个共用的内核页表，这�
     *   用户态->内核态 */* 内核态->用户态
     *   pc->sepc、stvec->pc */* sepc->pc
     *   跳转至pc所指地址继续执行汇编代码
+
+### 4.2 系统调用流程
+
+![系统调用流程](https://github.com/user-attachments/assets/60729e4c-8233-4908-ac13-b8e1c8a3a3c9)
 
 ## 5 Interrupts and device drivers
 ### 5.1 操作系统控制设备的方式
