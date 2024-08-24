@@ -1241,4 +1241,28 @@ fileread(struct file *f, uint64 addr, int n)
 
 #### 8.6.2 pipe(p)管道内核实现
 
+![pipe()系统调用生成管道流程](https://github.com/user-attachments/assets/b12102a0-3fbc-4e99-b1a2-3117f4131ebd)
+
+```c
+struct file {
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
+
+struct pipe {
+  struct spinlock lock;
+  char data[PIPESIZE];
+  uint nread;     // number of bytes read
+  uint nwrite;    // number of bytes written
+  int readopen;   // read fd is still open
+  int writeopen;  // write fd is still open
+};
+```
+调用完`pipe(p)`之后对`p[0]`、`p[1]`的读写都是对文件描述符的读写。
 ## 9 Concurrency revisited
