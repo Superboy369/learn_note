@@ -73,6 +73,9 @@ The `dup()` system call creates a copy of a file descriptor.
 * pipe()系统调用创建了管道，管道是内核的缓冲区，自带进程间的同步效果。
 ##### 1.2.2.1 pipe()创建管道内核具体实现
 [见第八章File system 8.6.2pipe(p)管道内核实现](#8.6.2-pipe(p)管道内核实现)
+
+<a href="#8.6.2 pipe(p)管道内核实现">跳转到更新</a>
+
 ### 1.3 文件系统
 。。。后续会讲
 ## 2 Operating system organization
