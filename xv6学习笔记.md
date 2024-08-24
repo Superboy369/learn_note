@@ -1,4 +1,4 @@
-# xv6 book 读书笔记
+# xv6 学习笔记
 ## 1 Operating system interfaces
 ### 1.1 系统调用
 [见第四章Traps and system calls](#4-Traps-and-system-calls)
